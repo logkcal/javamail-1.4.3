@@ -37,6 +37,8 @@
 package com.sun.mail.util;
 
 import java.io.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * This class is a subclass of DataOutputStream that copies the
@@ -51,6 +53,8 @@ public class TraceOutputStream extends FilterOutputStream {
     private boolean trace = false;
     private boolean quote = false;
     private OutputStream traceOut;
+
+    private final static Pattern loginUserPasswordPattern = Pattern.compile("\\S+ LOGIN \\S+ (\\S+)", Pattern.CASE_INSENSITIVE);
 
     /**
      * Creates an output stream filter built on top of the specified
@@ -100,14 +104,30 @@ public class TraceOutputStream extends FilterOutputStream {
      * mode is <code>true</code>
      */
     public void write(byte b[], int off, int len) throws IOException {
-	if (trace) {
-	    if (quote) {
-		for (int i = 0; i < len; i++)
-		    writeByte(b[off + i]);
-	    } else
-		traceOut.write(b, off, len);
-	}
-	out.write(b, off, len);
+        if (trace) {
+            if (quote) {
+                int skipCount = 0;
+                int skipOffset = 0;
+                if (len > 0) {
+                    String s = new String(b, off, len);
+                    Matcher m = loginUserPasswordPattern.matcher(s);
+                    if (m.find()) {
+                        skipCount = m.group(1).length();
+                        skipOffset = m.group(0).length() - skipCount;
+                    }
+                }
+
+                for (int i = 0; i < len; i++) {
+                    if (skipOffset <= i && i < skipOffset + skipCount) {
+                        continue;
+                    }
+
+                    writeByte(b[off + i]);
+                }
+            } else
+                traceOut.write(b, off, len);
+        }
+        out.write(b, off, len);
     }
 
     /**

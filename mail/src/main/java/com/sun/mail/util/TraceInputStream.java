@@ -37,6 +37,8 @@
 package com.sun.mail.util;
 
 import java.io.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * This class is a FilterInputStream that writes the bytes
@@ -51,6 +53,10 @@ public class TraceInputStream extends FilterInputStream {
     private boolean trace = false;
     private boolean quote = false;
     private OutputStream traceOut;
+    private int skipCount = 0;
+
+    private final static int fetchBodyHeadlineLookAhead = 48; // it is unlikely to come across a fetch body response headline longer than 48 octets.
+    private final static Pattern fetchBodyOctetCountPattern = Pattern.compile("\\* .+ FETCH \\(BODY\\[.*] \\{(.+)}", Pattern.CASE_INSENSITIVE);
 
     /**
      * Creates an input stream filter built on top of the specified
@@ -103,15 +109,35 @@ public class TraceInputStream extends FilterInputStream {
      * trace mode is <code>true</code>
      */
     public int read(byte b[], int off, int len) throws IOException {
-	int count = in.read(b, off, len);
-	if (trace && count != -1) {
-	    if (quote) {
-		for (int i = 0; i < count; i++)
-		    writeByte(b[off + i]);
-	    } else
-		traceOut.write(b, off, count);
-	}
-	return count;
+        int count = in.read(b, off, len);
+        if (trace && count != -1) {
+            if (quote) {
+                int skipOffset = 0;
+                if (skipCount <= 0 && count > 0) {
+                    String s = new String(b, off, Math.min(count, fetchBodyHeadlineLookAhead));
+                    Matcher m = fetchBodyOctetCountPattern.matcher(s);
+                    if (m.find()) {
+                        // e.g. for s, * 14888 FETCH (BODY[1.2] {6550}
+                        skipOffset = m.group(0).length();
+                        skipCount = Integer.parseInt(m.group(1)) + 2;
+                    }
+                }
+
+                int skips = 0;
+                for (int i = 0; i < count; i++) {
+                    if (skipOffset <= i && i < skipOffset + skipCount) {
+                        skips++;
+                        continue;
+                    }
+
+                    writeByte(b[off + i]);
+                }
+
+                skipCount -= skips; // a positive skip count takes a number of passes to skip a whole body contents.
+            } else
+                traceOut.write(b, off, count);
+        }
+        return count;
     }
 
     /**
